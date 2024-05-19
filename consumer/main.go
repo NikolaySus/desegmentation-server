@@ -6,7 +6,6 @@ import (
     "encoding/json"
     "fmt"
     "log"
-//    "maps"
     "net/http"
     "os"
     "os/signal"
@@ -82,8 +81,8 @@ func (s *ConsumerService) doJob() {
         s.segments[*sgt.Time][*sgt.SegmentNum] = sgt
         if len(s.segments[*sgt.Time]) == *sgt.SegmentsCount {
             var str string
-            for _, v := range s.segments[*sgt.Time] {
-                str += *v.Payload
+            for i := 0; i < *sgt.SegmentsCount; i++ {
+                str += *s.segments[*sgt.Time][i].Payload
             }
             delete(s.segments, *sgt.Time)
             var msg Msg
@@ -103,9 +102,13 @@ func (s *ConsumerService) doJob() {
             }
         }
     }
-    /*for _, v := range s.segments[*sgt.Time] {
-        str += *v.Payload
-    }*/
+    AGGR_TIMEOUT_SECONDS, _ := time.ParseDuration("1s")
+    for _, v := range s.segments {
+        t, err := time.Parse(time.RFC3339Nano, *v[0].Time)
+        if err == nil {
+            log.Print("is less than 1s: ", time.Now().Sub(t) < AGGR_TIMEOUT_SECONDS)
+        }
+    }
 }
 
 func main() {
@@ -138,6 +141,7 @@ func main() {
     }()
     <-quit
     log.Println("shutdown consumer service ...")
+    s.conn.DeleteTopics(topic)
     if err := s.conn.Close(); err != nil {
         log.Fatal("failed to close reader:", err)
     }
