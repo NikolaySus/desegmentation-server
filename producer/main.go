@@ -24,7 +24,6 @@ func New(kafkaURL string, topic string, partition int) (*ProducerService, error)
     if err != nil {
         return nil, err
     }
-    //s.conn.DeleteTopics(topic)
     return &s, nil
 }
 
