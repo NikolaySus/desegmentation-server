@@ -24,7 +24,7 @@ services:
         condition: service_started
     environment:
       - kafkaURL=kafka:${KAFKA_PORT:?error}
-      - topic=desegmentation-server
+      - topic=${TOPIC:?error}
       - port=${PRODUCER_PORT:?error}
   consumer:
     ports:
@@ -39,6 +39,6 @@ services:
         condition: service_started
     environment:
       - kafkaURL=kafka:${KAFKA_PORT:?error}
-      - topic=desegmentation-server
+      - topic=${TOPIC:?error}
       - port=${CONSUMER_PORT:?error}
       - applicationURL=${APPLICATION_URL:?error}

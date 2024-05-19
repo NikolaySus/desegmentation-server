@@ -24,6 +24,7 @@ func New(kafkaURL string, topic string, partition int) (*ProducerService, error)
     if err != nil {
         return nil, err
     }
+    //s.conn.DeleteTopics(topic)
     return &s, nil
 }
 
@@ -78,6 +79,7 @@ func main() {
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
     log.Println("shutdown producer service ...")
+    s.conn.DeleteTopics(topic)
     if err := s.conn.Close(); err != nil {
         log.Fatal("failed to close writer:", err)
     }
