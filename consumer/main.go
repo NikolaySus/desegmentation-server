@@ -6,6 +6,7 @@ import (
     "encoding/json"
     "fmt"
     "log"
+//    "maps"
     "net/http"
     "os"
     "os/signal"
@@ -22,9 +23,17 @@ type Msg struct {
     Error       *string `json:"error"`
 }
 
+type Sgt struct {
+    Payload         *string `json:"payload"`
+    Time            *string `json:"time"`
+    SegmentsCount   *int    `json:"segments_count"`
+    SegmentNum      *int    `json:"segment_num"`
+}
+
 type ConsumerService struct {
     conn            *kafka.Conn
     applicationURL  string
+    segments        map[string]map[int]Sgt
 }
 
 func New(kafkaURL string, topic string, partition int, applicationURL string) (*ConsumerService, error) {
@@ -35,6 +44,7 @@ func New(kafkaURL string, topic string, partition int, applicationURL string) (*
         return nil, err
     }
     s.applicationURL = applicationURL
+    s.segments = make(map[string]map[int]Sgt)
     return &s, nil
 }
 
@@ -56,22 +66,46 @@ func (s *ConsumerService) Receive(message Msg) error {
 
 func (s *ConsumerService) doJob() {
     message, err := s.conn.ReadMessage(1e3)
-    if err != nil {
-        return
+    if err == nil {
+        var sgt Sgt
+        if err := json.Unmarshal(message.Value, &sgt); err != nil {
+            log.Printf(`failed to unmarshal segment: {%s}`, err)
+            return
+        }
+        if sgt.Payload == nil || sgt.Time == nil || sgt.SegmentsCount == nil || sgt.SegmentNum == nil {
+            log.Printf(`missing required field in segment: {%s}`, sgt)
+            return
+        }
+        if _, ok := s.segments[*sgt.Time]; !ok {
+            s.segments[*sgt.Time] = make(map[int]Sgt)
+        }
+        s.segments[*sgt.Time][*sgt.SegmentNum] = sgt
+        if len(s.segments[*sgt.Time]) == *sgt.SegmentsCount {
+            var str string
+            for _, v := range s.segments[*sgt.Time] {
+                str += *v.Payload
+            }
+            delete(s.segments, *sgt.Time)
+            var msg Msg
+            if err := json.Unmarshal([]byte(str), &msg); err != nil {
+                log.Printf(`failed to unmarshal message: {%s}`, err)
+                return
+            }
+            msgError := "OK"
+            msg.Error = &msgError
+            if msg.Id == nil || msg.Username == nil || msg.Time == nil || msg.Text == nil || msg.Error == nil {
+                log.Printf(`missing required field in message: {%s}`, msg)
+                return
+            }
+            if err := s.Receive(msg); err != nil {
+                log.Printf(`failed to send message: {%s}`, err)
+                //return
+            }
+        }
     }
-    var msg Msg
-    if err := json.Unmarshal(message.Value, &msg); err != nil {
-        log.Printf(`failed to unmarshal message: {%s}`, err)
-        return
-    }
-    if msg.Id == nil || msg.Username == nil || msg.Time == nil || msg.Text == nil || msg.Error == nil {
-        log.Printf(`missing required field in message: {%s}`, msg)
-        return
-    }
-    if err := s.Receive(msg); err != nil {
-        log.Printf(`failed to send message: {%s}`, err)
-        return
-    }
+    /*for _, v := range s.segments[*sgt.Time] {
+        str += *v.Payload
+    }*/
 }
 
 func main() {
