@@ -79,42 +79,19 @@ func (s *ConsumerService) BuildReceive(pool map[int]Sgt, status string) {
     }
 }
 
-func get_some_key(m map[int]Sgt) int {
+func GetSomeKey(m map[int]Sgt) int {
     for k := range m {
         return k
     }
     return 0
 }
 
-func (s *ConsumerService) doJob() {
-    segment, err := s.conn.ReadMessage(1e3)
-    if err == nil {
-        // log.Println("incoming segmet: ", string(segment.Value))
-        var sgt Sgt
-        if err := json.Unmarshal(segment.Value, &sgt); err != nil {
-            log.Printf(`failed to unmarshal segment: {%s}`, err)
-            return
-        }
-        if sgt.Payload == nil || sgt.Time == nil || sgt.SegmentsCount == nil || sgt.SegmentNum == nil {
-            log.Printf(`missing required field in segment: {%s}`, sgt)
-            return
-        }
-        if _, ok := s.segments[*sgt.Time]; !ok {
-            s.segments[*sgt.Time] = make(map[int]Sgt)
-        }
-        s.segments[*sgt.Time][*sgt.SegmentNum] = sgt
-        if len(s.segments[*sgt.Time]) == *sgt.SegmentsCount {
-            s.BuildReceive(s.segments[*sgt.Time], "OK")
-            delete(s.segments, *sgt.Time)
-        }
-    }
+func (s *ConsumerService) Check() {
     AGGR_TIMEOUT_SECONDS, _ := time.ParseDuration("1s")
     for k := range s.segments {
-        t, err := time.Parse(time.RFC3339Nano, *s.segments[k][get_some_key(s.segments[k])].Time)
+        t, err := time.Parse(time.RFC3339Nano, *s.segments[k][GetSomeKey(s.segments[k])].Time)
         if err == nil {
-            if (time.Now().Sub(t) < AGGR_TIMEOUT_SECONDS) {
-                log.Print(k, " is less than 1s")
-            } else {
+            if (time.Now().Sub(t) > AGGR_TIMEOUT_SECONDS) {
                 log.Print(k, " reached 1s timeout, sending with error")
                 s.BuildReceive(s.segments[k], "MISSING_SEGMENTS")
                 delete(s.segments, k)
@@ -124,6 +101,11 @@ func (s *ConsumerService) doJob() {
             return
         }
     }
+}
+
+func (s *ConsumerService) ReadMessage() kafka.Message {
+    msg, _ := s.conn.ReadMessage(1e4)
+    return msg;
 }
 
 func main() {
@@ -142,6 +124,12 @@ func main() {
         log.Fatal("failed to dial leader:", err)
         return
     }
+    readMessage := make(chan kafka.Message)
+    go func() {
+       for msg := s.ReadMessage(); true; msg = s.ReadMessage() {
+           readMessage <- msg
+       }
+    }()
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     go func() {
@@ -149,8 +137,26 @@ func main() {
             select {
             case <-quit:
                 return
+            case segment := <-readMessage:
+                var sgt Sgt
+                if err := json.Unmarshal(segment.Value, &sgt); err != nil {
+                    log.Printf(`failed to unmarshal segment: {%s}`, err)
+                    return
+                }
+                if sgt.Payload == nil || sgt.Time == nil || sgt.SegmentsCount == nil || sgt.SegmentNum == nil {
+                    log.Printf(`missing required field in segment: {%s}`, sgt)
+                    return
+                }
+                if _, ok := s.segments[*sgt.Time]; !ok {
+                    s.segments[*sgt.Time] = make(map[int]Sgt)
+                }
+                s.segments[*sgt.Time][*sgt.SegmentNum] = sgt
+                if len(s.segments[*sgt.Time]) == *sgt.SegmentsCount {
+                    s.BuildReceive(s.segments[*sgt.Time], "OK")
+                    delete(s.segments, *sgt.Time)
+                }
             default:
-                s.doJob()
+                s.Check()
             }
         }
     }()
