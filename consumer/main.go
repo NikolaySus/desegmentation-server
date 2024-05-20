@@ -9,17 +9,15 @@ import (
     "net/http"
     "os"
     "os/signal"
+    "sort"
     "syscall"
     "time"
     kafka "github.com/segmentio/kafka-go"
 )
 
 type Msg struct {
-    Id          *string `json:"id"`
-    Username    *string `json:"username"`
-    Time        *string `json:"time"`
-    Text        *string `json:"text"`
-    Error       *string `json:"error"`
+    Data    *string `json:"data"`
+    Error   *string `json:"error"`
 }
 
 type Sgt struct {
@@ -63,11 +61,37 @@ func (s *ConsumerService) Receive(message Msg) error {
     return nil
 }
 
+func (s *ConsumerService) BuildReceive(pool map[int]Sgt, status string) {
+    var str string
+    keys := make([]int, 0)
+    for k, _ := range pool {
+        keys = append(keys, k)
+    }
+    sort.Ints(keys)
+    for _, k := range keys {
+        str += *pool[k].Payload
+    }
+    var msg Msg
+    msg.Data = &str
+    msg.Error = &status
+    if err := s.Receive(msg); err != nil {
+        log.Printf(`failed to send message: {%s}`, err)
+    }
+}
+
+func get_some_key(m map[int]Sgt) int {
+    for k := range m {
+        return k
+    }
+    return 0
+}
+
 func (s *ConsumerService) doJob() {
-    message, err := s.conn.ReadMessage(1e3)
+    segment, err := s.conn.ReadMessage(1e3)
     if err == nil {
+        // log.Println("incoming segmet: ", string(segment.Value))
         var sgt Sgt
-        if err := json.Unmarshal(message.Value, &sgt); err != nil {
+        if err := json.Unmarshal(segment.Value, &sgt); err != nil {
             log.Printf(`failed to unmarshal segment: {%s}`, err)
             return
         }
@@ -80,33 +104,24 @@ func (s *ConsumerService) doJob() {
         }
         s.segments[*sgt.Time][*sgt.SegmentNum] = sgt
         if len(s.segments[*sgt.Time]) == *sgt.SegmentsCount {
-            var str string
-            for i := 0; i < *sgt.SegmentsCount; i++ {
-                str += *s.segments[*sgt.Time][i].Payload
-            }
+            s.BuildReceive(s.segments[*sgt.Time], "OK")
             delete(s.segments, *sgt.Time)
-            var msg Msg
-            if err := json.Unmarshal([]byte(str), &msg); err != nil {
-                log.Printf(`failed to unmarshal message: {%s}`, err)
-                return
-            }
-            msgError := "OK"
-            msg.Error = &msgError
-            if msg.Id == nil || msg.Username == nil || msg.Time == nil || msg.Text == nil || msg.Error == nil {
-                log.Printf(`missing required field in message: {%s}`, msg)
-                return
-            }
-            if err := s.Receive(msg); err != nil {
-                log.Printf(`failed to send message: {%s}`, err)
-                //return
-            }
         }
     }
     AGGR_TIMEOUT_SECONDS, _ := time.ParseDuration("1s")
-    for _, v := range s.segments {
-        t, err := time.Parse(time.RFC3339Nano, *v[0].Time)
+    for k := range s.segments {
+        t, err := time.Parse(time.RFC3339Nano, *s.segments[k][get_some_key(s.segments[k])].Time)
         if err == nil {
-            log.Print("is less than 1s: ", time.Now().Sub(t) < AGGR_TIMEOUT_SECONDS)
+            if (time.Now().Sub(t) < AGGR_TIMEOUT_SECONDS) {
+                log.Print(k, " is less than 1s")
+            } else {
+                log.Print(k, " reached 1s timeout, sending with error")
+                s.BuildReceive(s.segments[k], "MISSING_SEGMENTS")
+                delete(s.segments, k)
+            }
+        } else {
+            log.Print("ALARM!!! UNEXPECTED ERROR!!!")
+            return
         }
     }
 }
