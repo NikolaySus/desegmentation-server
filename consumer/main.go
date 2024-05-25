@@ -3,6 +3,7 @@ package main
 import (
     "bytes"
     "context"
+    "encoding/base64"
     "encoding/json"
     "fmt"
     "log"
@@ -72,7 +73,13 @@ func (s *ConsumerService) BuildReceive(pool map[int]Sgt, status string) {
         str += *pool[k].Payload
     }
     var msg Msg
-    msg.Data = &str
+    data, err := base64.StdEncoding.DecodeString(str)
+    if err != nil {
+        panic(err)
+    }
+    ds := string(data)
+    msg.Data = &ds
+    // msg.Data = &str
     msg.Error = &status
     if err := s.Receive(msg); err != nil {
         log.Printf(`failed to send message: {%s}`, err)
